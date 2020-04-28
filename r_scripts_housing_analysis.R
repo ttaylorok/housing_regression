@@ -167,24 +167,7 @@ plot(fit12)
 
 
 # Compute the analysis of variance
-av <- aov(SalePrice ~ Neighborhood +
-            MSZoning + 
-            Street +
-            LotShape +
-            LandContour +
-            Utilities +
-            LotConfig +
-            LandSlope +
-            Condition1 +
-            Condition2 +
-            BldgType +
-            HouseStyle +
-            RoofStyle +
-            RoofMatl +
-            Exterior1st +
-            Exterior2nd, data = data)
-# Summary of the analysis
-summary(av)
+
 
 library(dplyr)
 
@@ -193,19 +176,154 @@ factors <- dplyr::select_if(data, is.factor)
 factors2 <- factors[,c(-2,-3,-6,-29)]
 factors3 <- factors2[,c(-36)]
 
+#factors4 <- subset(factors, -c(factors$Street, factors$Alley))
+
+# exclude variables v1, v2, v3
+dropvars <- names(factors) %in% c("Street", "Alley", "Utilities","CentralAir","PoolQC","Fence","MiscFeature")
+omg2 <- factors[!dropvars]
 
 
-omg <- cbind(data$SalePrice, factors3)
 
-omg <- rename(omg,SalePrice = 'data$SalePrice')
+omg3 <- cbind(data$SalePrice, omg2)
 
-av <- aov(formula(omg[,0:35]), data=omg)
+#omg4 <- rename(omg3, 'data$SalePrice' = SalePrice)
+
+av <- aov(formula(omg3[,1:5]), data=omg3)
 summary(av)
 
+av2 <- aov(formula(omg3), data=omg3)
+summary(av2)
 
 
-omg <- rename(omg, SalePrice = "data$SalePrice") #For renaming dataframe column
+
+#omg <- rename(omg, SalePrice = "data$SalePrice") #For renaming dataframe column
+
+msz <- aggregate(x = data2$SalePrice, 
+                by = list(data2$MSZoning), 
+                FUN = mean)
+msz <- msz[order(msz$x),]
+nums <- as.numeric(factor(data2$MSZoning, levels = msz$Group.1, exclude = NULL))
+data2$msz_nums <- nums
+
+# remove factors with a low significance
+
+fit13 <- lm(SalePrice ~ GrLivArea +
+              log(LotArea) +
+              TotalBsmtSF +
+              OverallQual +
+              TotRmsAbvGrd +
+              GarageArea +
+              OverallCond +
+              YearBuilt +
+              nh_nums +
+              msz_nums, data=data2)
+summary(fit13)
+par(mar=c(1,1,1,1))
+layout(matrix(c(1,2,3,4),2,2))
+plot(fit13)
+
+
+ord_numeric <- function(data,colx,coly)
+{
+  temp <- aggregate(x = data[,coly], 
+                   by = list(data[,colx]), 
+                   FUN = mean)
+  temp <- temp[order(temp$x),]
+  nums <- as.numeric(factor(data[,colx], levels = temp$Group.1, exclude = NULL))
+  return(nums)
+}
+
+data2$ext_qual_num = ord_numeric(data=data2,colx='ExterQual',coly='SalePrice')
+data2$sale_cond_num = ord_numeric(data=data2,colx='SaleCondition',coly='SalePrice')
+data2$kitch_qual_num = ord_numeric(data=data2,colx='KitchenQual',coly='SalePrice')
+data2$bsmt_qual_num = ord_numeric(data=data2,colx='BsmtQual',coly='SalePrice')
+data2$roof_matl_num = ord_numeric(data=data2,colx='RoofMatl',coly='SalePrice')
+data2$roof_stl_num = ord_numeric(data=data2,colx='RoofStyle',coly='SalePrice')
+data2$bldg_type_num = ord_numeric(data=data2,colx='BldgType',coly='SalePrice')
+data2$house_stl_num = ord_numeric(data=data2,colx='HouseStyle',coly='SalePrice')
+data2$lot_shp_num = ord_numeric(data=data2,colx='LotShape',coly='SalePrice')
+data2$lot_cnt_num = ord_numeric(data=data2,colx='LandContour',coly='SalePrice')
+
+plot(data2$ext_qual_num, data2$SalePrice)
+
+fit13 <- lm(SalePrice ~ GrLivArea +
+              log(LotArea) +
+              TotalBsmtSF +
+              OverallQual +
+              TotRmsAbvGrd +
+              GarageArea +
+              OverallCond +
+              YearBuilt +
+              nh_nums +
+              ext_qual_num +
+              sale_cond_num +
+              kitch_qual_num +
+              roof_matl_num +
+              roof_stl_num +
+              lot_cnt_num, data=data2)
+summary(fit13)
+par(mar=c(1,1,1,1))
+layout(matrix(c(1,2,3,4),2,2))
+plot(fit13)
+
+#data3 <- data2[c(-692,-1183,-899),]
+
+fit14 <- lm(SalePrice ~ GrLivArea +
+              log(LotArea) +
+              TotalBsmtSF +
+              OverallQual +
+              TotRmsAbvGrd +
+              GarageArea +
+              OverallCond +
+              YearBuilt +
+              nh_nums +
+              ext_qual_num +
+              sale_cond_num +
+              kitch_qual_num +
+              roof_matl_num +
+              roof_stl_num +
+              lot_cnt_num, data=data2)
+summary(fit14)
+par(mar=c(1,1,1,1))
+layout(matrix(c(1,2,3,4),2,2))
+plot(fit14)
+
+#cd <- cooks.distance(fit14)
 
 
 
-columns(factors)
+cooksd <- cooks.distance(fit14)
+
+# Plot the Cook's Distance using the traditional 4/n criterion
+sample_size <- nrow(data2)
+layout(1,1,1)
+plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distance
+abline(h = 4/sample_size, col="red")  # add cutoff line
+text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4/sample_size, names(cooksd),""), col="red")  # add labels
+
+top_x_outlier <- 2
+influential <- as.numeric(names(sort(cooksd, decreasing = TRUE)[1:top_x_outlier]))
+
+### MODEL 15, remove outliers
+
+data3 <- data2[-influential, ]
+
+fit15 <- lm(SalePrice ~ GrLivArea +
+              log(LotArea) +
+              TotalBsmtSF +
+              OverallQual +
+              TotRmsAbvGrd +
+              GarageArea +
+              OverallCond +
+              YearBuilt +
+              nh_nums +
+              ext_qual_num +
+              sale_cond_num +
+              kitch_qual_num +
+              roof_matl_num +
+              roof_stl_num +
+              lot_cnt_num, data=data2)
+summary(fit15)
+par(mar=c(1,1,1,1))
+layout(matrix(c(1,2,3,4),2,2))
+plot(fit15)
