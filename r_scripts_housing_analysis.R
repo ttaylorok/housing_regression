@@ -301,29 +301,175 @@ plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot c
 abline(h = 4/sample_size, col="red")  # add cutoff line
 text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4/sample_size, names(cooksd),""), col="red")  # add labels
 
-top_x_outlier <- 2
+top_x_outlier <- 5
 influential <- as.numeric(names(sort(cooksd, decreasing = TRUE)[1:top_x_outlier]))
+influential2 <- sort(cooksd, decreasing = TRUE, index.return=TRUE)$ix[1:top_x_outlier]
 
 ### MODEL 15, remove outliers
 
-data3 <- data2[-influential, ]
+data3 <- data2[-influential2, ]
 
 fit15 <- lm(SalePrice ~ GrLivArea +
               log(LotArea) +
               TotalBsmtSF +
               OverallQual +
               TotRmsAbvGrd +
-              GarageArea +
               OverallCond +
               YearBuilt +
               nh_nums +
               ext_qual_num +
               sale_cond_num +
               kitch_qual_num +
-              roof_matl_num +
               roof_stl_num +
-              lot_cnt_num, data=data2)
+              lot_cnt_num, data=data3)
 summary(fit15)
-par(mar=c(1,1,1,1))
+par(mar=c(2,2,2,2))
 layout(matrix(c(1,2,3,4),2,2))
 plot(fit15)
+
+#https://stackoverflow.com/questions/26237688/rmse-root-mean-square-deviation-calculation-in-r
+RMSE = function(m, o){
+  sqrt(mean((m - o)^2))
+}
+
+rmse_fit15 = RMSE(fit15$fitted.values,data3$SalePrice)
+
+######### RANDOM FOREST MODEL
+
+install.packages("randomForest")
+library(randomForest)
+
+# Split into Train and Validation sets
+# Training Set : Validation Set = 70 : 30 (random)
+set.seed(100)
+train <- sample(nrow(data3), 0.7*nrow(data3), replace = FALSE)
+TrainSet <- data3[train,]
+ValidSet <- data3[-train,]
+summary(TrainSet)
+summary(ValidSet)
+
+# Create a Random Forest model with default parameters
+model1 <- randomForest(SalePrice ~ GrLivArea +
+                         LotArea +
+                         TotalBsmtSF +
+                         OverallQual +
+                         TotRmsAbvGrd +
+                         OverallCond +
+                         YearBuilt +
+                         nh_nums +
+                         ext_qual_num +
+                         sale_cond_num +
+                         kitch_qual_num +
+                         roof_stl_num +
+                         lot_cnt_num,
+                       data = TrainSet,
+                       importance = TRUE)
+model1
+
+
+predTrain <- predict(model1, TrainSet, type = "class")
+table(predTrain, TrainSet$SalePrice)
+
+
+
+# Predicting on Validation set
+predValid <- predict(model1, ValidSet, type = "class")
+# Checking classification accuracy
+RMSE(predValid,ValidSet$SalePrice)                    
+table(predValid,ValidSet$SalePrice)
+
+mean(predValid == ValidSet$SalePrice)                    
+
+table(predValid,ValidSet$SalePrice)
+
+library(tidyverse)
+library(caret)
+library(xgboost)
+
+tb = as.tibble(data3)
+
+features_train <- select(tb,'GrLivArea',
+'LotArea',
+'TotalBsmtSF',
+'OverallQual',
+'TotRmsAbvGrd',
+'OverallCond',
+'YearBuilt',
+'nh_nums',
+'ext_qual_num',
+'sale_cond_num',
+'kitch_qual_num',
+'roof_stl_num','lot_cnt_num')
+response_train <- select(tb, 'SalePrice')
+
+xgb.fit1 <- xgb.cv(
+  data = as.matrix(features_train),
+  label = as.matrix(response_train),
+  nrounds = 100,
+  nfold = 5,
+  objective = "reg:linear",  # for regression models
+  verbose = 0               # silent,
+)
+
+# get number of trees that minimize error
+xgb.fit1$evaluation_log %>%
+  dplyr::summarise(
+    ntrees.train = which(train_rmse_mean == min(train_rmse_mean))[1],
+    rmse.train   = min(train_rmse_mean),
+    ntrees.test  = which(test_rmse_mean == min(test_rmse_mean))[1],
+    rmse.test   = min(test_rmse_mean),
+  )
+
+hyper_grid <- expand.grid(
+  eta = c(.01, .05, .1, .3),
+  max_depth = c(1, 3, 5, 7),
+  min_child_weight = c(1, 3, 5, 7),
+  subsample = c(.65, .8, 1), 
+  colsample_bytree = c(.8, .9, 1),
+  optimal_trees = 0,               # a place to dump results
+  min_RMSE = 0                     # a place to dump results
+)
+
+
+# grid search 
+for(i in 1:nrow(hyper_grid)) {
+  
+  # create parameter list
+  params <- list(
+    eta = hyper_grid$eta[i],
+    max_depth = hyper_grid$max_depth[i],
+    min_child_weight = hyper_grid$min_child_weight[i],
+    subsample = hyper_grid$subsample[i],
+    colsample_bytree = hyper_grid$colsample_bytree[i]
+  )
+  
+  # reproducibility
+  set.seed(123)
+  
+  # train model
+  xgb.tune <- xgb.cv(
+    params = params,
+    data = as.matrix(features_train),
+    label = as.matrix(response_train),
+    nrounds = 5000,
+    nfold = 5,
+    objective = "reg:linear",  # for regression models
+    verbose = 0,               # silent,
+    early_stopping_rounds = 10 # stop if no improvement for 10 consecutive trees
+  )
+  
+  # add min training error and trees to grid
+  hyper_grid$optimal_trees[i] <- which.min(xgb.tune$evaluation_log$test_rmse_mean)
+  hyper_grid$min_RMSE[i] <- min(xgb.tune$evaluation_log$test_rmse_mean)
+}
+
+hyper_grid %>%
+  dplyr::arrange(min_RMSE) %>%
+  head(10)
+
+# plot error vs number trees
+ggplot(xgb.fit1$evaluation_log) +
+  geom_line(aes(iter, train_rmse_mean), color = "red") +
+  geom_line(aes(iter, test_rmse_mean), color = "blue")
+
+
