@@ -27,6 +27,8 @@ length(which(data$TotalBsmtSF == 0))
 sum(is.na(data$TotalBsmtSF))
 
 
+
+
 #### MODEL 1
 
 fit1 <- lm(SalePrice ~ GrLivArea, data=data)
@@ -35,7 +37,7 @@ summary(fit1)
 
 # diagnostic plots
 layout(matrix(c(1,2,3,4),2,2)) # optional 4 graphs/page
-plot(fit)
+plot(fit1)
 
 ##### MODEL 2
 
@@ -334,9 +336,28 @@ RMSE = function(m, o){
 
 rmse_fit15 = RMSE(fit15$fitted.values,data3$SalePrice)
 
+library(tidyverse)
+library(caret)
+library(xgboost)
+
+tb = as_tibble(data3)
+
+features_train <- select(tb,'GrLivArea',
+                         'LotArea',
+                         'TotalBsmtSF',
+                         'OverallQual',
+                         'TotRmsAbvGrd',
+                         'OverallCond',
+                         'YearBuilt',
+                         'nh_nums',
+                         'ext_qual_num',
+                         'sale_cond_num',
+                         'kitch_qual_num',
+                         'roof_stl_num','lot_cnt_num')
+response_train <- select(tb, 'SalePrice')
+
 ######### RANDOM FOREST MODEL
 
-install.packages("randomForest")
 library(randomForest)
 
 # Split into Train and Validation sets
@@ -348,23 +369,107 @@ ValidSet <- data3[-train,]
 summary(TrainSet)
 summary(ValidSet)
 
+tunegrid <- expand.grid(
+  mtry = c(2,4,6,8),
+  ntree = c(50,100,200),
+  nPerm = c(1,2,3),
+  sampsize = c(nrow(data3), 0.8*nrow(data3), 0.6*nrow(data3)),
+  replace = c(TRUE,FALSE)
+)
+
+control <- trainControl(method="repeatedcv",
+                        number=5,
+                        repeats=3,
+                        search="grid")
+
+rf_gridsearch1 <- train(x = as.matrix(features_train),
+                       y = as_vector(response_train),
+                       method="rf",
+                       trControl=control)
+
+data_test = read_csv("DATA/test.csv")
+
+data_test_filt = select(j11,'GrLivArea',
+                        'LotArea',
+                        'TotalBsmtSF',
+                        'OverallQual',
+                        'TotRmsAbvGrd',
+                        'OverallCond',
+                        'YearBuilt',
+                        'nh_nums',
+                        'ext_qual_num',
+                        'sale_cond_num',
+                        'kitch_qual_num',
+                        'roof_stl_num',
+                        'lot_cnt_num')
+
+qc <- data_test_filt %>% summarise_all(~sum(is.na(.)))
+
+na_vals <- which(is.na(data_test_filt$TotalBsmtSF))
+
+data_test_filt$TotalBsmtSF[na_vals] = 0
+
+na_vals <- which(is.na(data_test_filt$kitch_qual_num))
+
+data_test_filt$kitch_qual_num[na_vals] = 1
+
+
+rf_pred <- predict(rf_gridsearch1,newdata=data_test_filt)
+
+out_rf <- data.frame(cbind(data_test$Id, rf_pred))
+write_csv(out_rf,"rf_model.csv")
+
+
+customRF <- list(type = "Regression", library = "randomForest", loop = NULL)
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree","nPerm","sampsize","replace"),
+                                  class = rep("numeric", 5),
+                                  label = c("mtry", "ntree","nPerm","sampsize","replace"))
+customRF$grid <- function(x, y, len = NULL, search = "grid") {}
+customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
+  randomForest(x, y,
+               mtry = param$mtry,
+               ntree = param$ntree,
+               nPerm = param$nPerm,
+               sampsize = param$sampsize,
+               replace = param$replace)
+}
+customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+  predict(modelFit, newdata)
+customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
+  predict(modelFit, newdata, type = "prob")
+customRF$sort <- function(x) x[order(x[,1]),]
+customRF$levels <- function(x) x$classes
+
 # Create a Random Forest model with default parameters
-model1 <- randomForest(SalePrice ~ GrLivArea +
-                         LotArea +
-                         TotalBsmtSF +
-                         OverallQual +
-                         TotRmsAbvGrd +
-                         OverallCond +
-                         YearBuilt +
-                         nh_nums +
-                         ext_qual_num +
-                         sale_cond_num +
-                         kitch_qual_num +
-                         roof_stl_num +
-                         lot_cnt_num,
-                       data = TrainSet,
+model1 <- randomForest(x = as.matrix(features_train),
+                       y = as.matrix(response_train),
                        importance = TRUE)
-model1
+
+control <- trainControl(method="repeatedcv",
+                        number=5,
+                        repeats=3,
+                        search="grid")
+
+#mtry <- sqrt(ncol(x))
+#tunegrid <- expand.grid(.mtry=mtry)
+
+start_time <- Sys.time()
+rf_gridsearch <- train(x = as.matrix(features_train),
+                       y = data3$SalePrice,
+                       method=customRF,
+                       metric="RMSE",
+                       tuneGrid=tunegrid,
+                       trControl=control)
+end_time <- Sys.time()
+end_time - start_time
+
+for(i in 1:nrow(hyper_grid_rf)){
+  print(i)
+  rf.crossValidation(model1,
+                     xdata = as.matrix(features_train),
+                     ydata = as.matrix(response_train),
+                     n = 5)
+}
 
 
 predTrain <- predict(model1, TrainSet, type = "class")
@@ -382,25 +487,9 @@ mean(predValid == ValidSet$SalePrice)
 
 table(predValid,ValidSet$SalePrice)
 
-library(tidyverse)
-library(caret)
-library(xgboost)
 
-tb = as.tibble(data3)
 
-features_train <- select(tb,'GrLivArea',
-'LotArea',
-'TotalBsmtSF',
-'OverallQual',
-'TotRmsAbvGrd',
-'OverallCond',
-'YearBuilt',
-'nh_nums',
-'ext_qual_num',
-'sale_cond_num',
-'kitch_qual_num',
-'roof_stl_num','lot_cnt_num')
-response_train <- select(tb, 'SalePrice')
+
 
 xgb.fit1 <- xgb.cv(
   data = as.matrix(features_train),
@@ -451,12 +540,15 @@ for(i in 1:nrow(hyper_grid)) {
     params = params,
     data = as.matrix(features_train),
     label = as.matrix(response_train),
-    nrounds = 5000,
+    nrounds = 100,
     nfold = 5,
     objective = "reg:linear",  # for regression models
     verbose = 0,               # silent,
     early_stopping_rounds = 10 # stop if no improvement for 10 consecutive trees
   )
+  
+  #print(which.min(xgb.tune$evaluation_log$test_rmse_mean))
+  #print(min(xgb.tune$evaluation_log$test_rmse_mean))
   
   # add min training error and trees to grid
   hyper_grid$optimal_trees[i] <- which.min(xgb.tune$evaluation_log$test_rmse_mean)
@@ -467,9 +559,28 @@ hyper_grid %>%
   dplyr::arrange(min_RMSE) %>%
   head(10)
 
+hyper_grid$min_RMSE
+
 # plot error vs number trees
 ggplot(xgb.fit1$evaluation_log) +
   geom_line(aes(iter, train_rmse_mean), color = "red") +
   geom_line(aes(iter, test_rmse_mean), color = "blue")
 
+# xgb_best <- xgb.train(x=as.matrix(features_train),
+#                       y=as.matrix(response_train))
+
+ps <- hyper_grid[which(hyper_grid$min_RMSE == min(hyper_grid$min_RMSE)),]
+
+xg <- xgboost(data = as.matrix(features_train),
+        label = as.matrix(response_train),
+        params = list(eta = ps$eta,
+                      max_depth = ps$max_depth,
+                      min_child_weight = ps$min_child_weight,
+                      subsample = ps$subsample,
+                      colsample_bytree = ps$colsample_bytree),
+        nrounds = 50)
+
+xgpred <- predict(xg, newdata = as.matrix(data_test_filt))
+out_xgb <- data.frame(cbind(data_test$Id, xgpred))
+write_csv(out_xgb,"xgpred2_model.csv")
 
