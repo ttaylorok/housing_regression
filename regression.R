@@ -550,20 +550,29 @@ RMSE(fitdata3$SalePrice, refPred)
 
 tunegrid <- expand.grid(
   mtry = c(2,4,6,8,16,20,30,40),
-  ntree = c(50,100,200),
+  ntree = c(50,100,200,250,300),
   nPerm = c(1,2,3),
-  sampsize = c(ceiling(nrow(fitdata_f2)*.9),ceiling(nrow(fitdata_f2)*.8),ceiling(nrow(fitdata_f2)*.6))
+  sampsize = c(ceiling(nrow(fitdata_f2)*.9),ceiling(nrow(fitdata_f2)*.8),ceiling(nrow(fitdata_f2)*.6)),
+  replace = c(TRUE,FALSE)
+)
+tunegrid <- expand.grid(
+  mtry = c(20),
+  ntree = c(300,400,500,600,800,1000,1200,1400),
+  nPerm = c(1),
+  sampsize = c(ceiling(nrow(fitdata_f2)*.8)),
+  replace = c(FALSE)
 )
 
 
 
 customRF <- list(type = "Regression", library = "randomForest", loop = NULL)
-customRF$parameters <- data.frame(parameter = c("mtry", "ntree","nPerm","sampsize"),
-                                  class = rep("numeric", 4),
-                                  label = c("mtry", "ntree","nPerm","sampsize"))
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree","nPerm","sampsize","replace"),
+                                  class = c(rep("numeric", 4),"logical"),
+                                  label = c("mtry", "ntree","nPerm","sampsize","replace"))
 customRF$grid <- function(x, y, len = NULL, search = "grid") {}
 customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
-  randomForest(x, y, mtry = param$mtry, ntree=param$ntree, nPerm=param$nPerm, sampsize = param$sampsize, ...)
+  randomForest(x, y, mtry = param$mtry, ntree=param$ntree,
+               nPerm=param$nPerm, sampsize = param$sampsize, replace = param$replace, ...)
 }
 customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
   predict(modelFit, newdata)
@@ -585,17 +594,62 @@ control <- trainControl(method="repeatedcv",
 #mtry <- sqrt(ncol(x))
 #tunegrid <- expand.grid(.mtry=mtry)
 
-rf_gridsearch <- train(x = data.frame(fitdata_f2[,-1]),
+rf_gridsearch2 <- train(x = data.frame(fitdata_f2[,-1]),
                        y = as_vector(fitdata_f2[,1]),
                        method=customRF,
                        metric="RMSE",
                        tuneGrid=tunegrid,
                        trControl=control)
 
-rf_gridsearch
+rf_gridsearch2
 
+xgControl <- trainControl(## 10-fold CV
+  method = "repeatedcv",
+  number = 10,
+  ## repeated ten times
+  repeats = 3)
 
+# good workflow here:
+# https://www.kaggle.com/pelkoja/visual-xgboost-tuning-with-caret
+grid1 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(3, 4, 5, 6, 8),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
 
+xgbFit1 <- caret::train(
+  x = fitdata_f2[,-1],
+  y = fitdata_f2[,1],
+  trControl = xgControl,
+  tuneGrid = grid1,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+xgbFit1
+
+grid2 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = xgbFit1$bestTune$eta,
+  max_depth = xgbFit1$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = c(0.4, 0.6, 0.8, 1.0),
+  min_child_weight = c(1, 2, 3),
+  subsample = c(0.5, 0.75, 1.0)
+)
+
+xgbFit2 <- caret::train(
+  x = fitdata_f2[,-1],
+  y = fitdata_f2[,1],
+  trControl = xgControl,
+  tuneGrid = grid2,
+  method = "xgbTree",
+  verbose = TRUE
+)
 
 
 
