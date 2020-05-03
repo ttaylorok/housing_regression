@@ -7,6 +7,8 @@ library(plotly)
 library(e1071) # box-cox transform
 library(RANN) # knn imputation
 library(randomForest)
+library(gridExtra) #subplots
+library(grid) #titles?
 
 options(tibble.print_max = 40)
 
@@ -28,6 +30,7 @@ numeric_vars <- select_if(data[,which(colnames(data) != 'SalePrice' &
 ########## CREATE SUMMARY TABLE
 
 sf <- c(mean = ~mean(.,na.rm = TRUE),
+        stdev = ~sd(.,na.rm = TRUE),
         min = ~min(., na.rm = TRUE),
         max = ~max(., na.rm = TRUE),
         num_zeros = ~sum(. == 0, na.rm =TRUE),
@@ -42,27 +45,21 @@ sumtable <- ttsummary(numeric_vars, sf)
 
 ########## TRANSFORM VALUES
 
-ggplot(data = data, aes(SalePrice)) +
-  geom_histogram(alpha=0.9, aes(y=..density..)) +
-  geom_density() 
+p1 <- ggplot(data = data, aes(SalePrice)) +
+  geom_histogram(alpha=0.9, aes(y=..density..), fill = "blue") +
+  geom_density() + annotate("label", x = 6e5, y = 6e-6,
+                            label = "skew: 1.88\nkurtosis: 6.50",
+                            color="red", size = 3)
 
-ggplot(data, aes(sample = SalePrice)) +
-  stat_qq() + stat_qq_line()
+p2 <- ggplot(data, aes(sample = SalePrice)) +
+  stat_qq(color = "blue") + stat_qq_line() + ylab("SalePrice")
 
-########## CREATE CORRELATION TABLE
+p3 <- grid.arrange(p1, p2, nrow = 1,
+             top=textGrob("SalePrice Distribution",gp=gpar(fontsize=16,font=3)))
 
-descrCor <-  cor(numeric_vars)
+ggsave("saleprice_dist.png", plot = p3)
 
-melted_cormat = melt(descrCor)
 
-ct <- ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
-  geom_tile()
-
-fig <- ggplotly(ct)
-#fig.write_html("test.html")
-htmlwidgets::saveWidget(fig,'ct.html')
-
-hist(numeric_vars$LotArea)
 
 ########## PREPROCESSING
 
@@ -85,6 +82,31 @@ pp_trans_y <- predict(pp_params_y, data.frame(SalePrice = data$SalePrice))
 
 comboInfo <- findLinearCombos(pp_trans)
 
+p1 <- ggplot(data = pp_trans_y, aes(SalePrice)) +
+  geom_histogram(alpha=0.9, aes(y=..density..), fill = "blue") +
+  geom_density() + annotate("label", x = 13, y = 1,
+                            label = "skew: 0.12\nkurtosis: 0.80",
+                            color="red", size = 3)
+
+
+p2 <- ggplot(pp_trans_y, aes(sample = SalePrice)) +
+  stat_qq(color = "blue") + stat_qq_line() + ylab("SalePrice")
+
+p3 <- grid.arrange(p1, p2, nrow = 1,
+                   top=textGrob("SalePrice Distribution (transformed)",gp=gpar(fontsize=16,font=3)))
+
+ggsave("saleprice_dist_trans.png", plot = p3)
+
+ttsummary(pp_trans,sf)
+
+p3_1 <- ggplot(data = data, aes(GrLivArea)) +
+  geom_histogram(alpha=0.9, aes(y=..density..), fill = "blue") +
+  geom_density()
+p3_2 <- ggplot(data = pp_trans, aes(GrLivArea)) +
+  geom_histogram(alpha=0.9, aes(y=..density..), fill = "blue") +
+  geom_density()
+p3_g <- grid.arrange(p3_1, p3_2, nrow = 1)
+
 #hist(pp_trans$SalePrice)
 hist(pp_trans$MSSubClass)
 hist(pp_trans$GrLivArea)
@@ -92,23 +114,49 @@ hist(pp_trans$WoodDeckSF)
 
 ppsum <- ttsummary(pp_trans, sf)
 
-#### FACTOR VARS
+########## CREATE CORRELATION TABLE
 
-# decide what factors to remove
-data_fact <- data %>%  mutate_if(sapply(data, is.character), as.factor)
-factor_vars <- select_if(data_fact, is.factor)
+descrCor <-  cor(pp_trans)
+
+descrCor[upper.tri(descrCor)]<- NA
+melted_cormat <- melt(descrCor, na.rm = TRUE)
+#melted_cormat <- melt(descrCor)
+
+p_xc <- ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + 
+  geom_tile() + scale_fill_gradient2(low = "red", high = "blue", mid = "white", 
+                                     midpoint = 0, limit = c(-1,1), space = "Lab") +
+  theme(axis.text.x = element_text(angle = 90),
+        axis.title = element_blank()) + labs(title = "Correlation Matrix", fill = "Correlation")
+
+ggsave("xcorr_matrix.png", plot = p_xc)
+
+#fig <- ggplotly(ct)
+#fig.write_html("test.html")
+#htmlwidgets::saveWidget(fig,'ct.html')
+
+hist(numeric_vars$LotArea)
+
+#### FACTOR VARS
 
 summary(factor_vars)
 
+# mutate chr columns to factor and subset
+data_fact <- data %>%  mutate_if(sapply(data, is.character), as.factor)
+factor_vars <- select_if(data_fact, is.factor)
+
+# determine most frequent value for Electrical
 t_elec <- table(factor_vars$Electrical)
 r_elec <- names(which(t_elec == max(t_elec)))
 
+# determine most frequent value for MasVnrType
 t_msn <- table(factor_vars$MasVnrType)
 r_msn <- names(which(t_msn == max(t_msn)))
 
+# replace missing values with mode
 factor_filt <- replace_na(factor_vars, list(Electrical = r_elec,
                                             MasVnrType = r_msn))
 
+# add factor level 'None'
 levels(factor_filt$Alley) <- c(levels(factor_filt$Alley),"None")
 levels(factor_filt$BsmtQual) <- c(levels(factor_filt$BsmtQual),"None")
 levels(factor_filt$BsmtCond) <- c(levels(factor_filt$BsmtCond),"None")
@@ -124,6 +172,8 @@ levels(factor_filt$PoolQC) <- c(levels(factor_filt$PoolQC),"None")
 levels(factor_filt$Fence) <- c(levels(factor_filt$Fence),"None")
 levels(factor_filt$MiscFeature) <- c(levels(factor_filt$MiscFeature),"None")
 
+
+# replace NA's with 'None'
 factor_filt <- replace_na(factor_filt, list(Alley = "None", BsmtQual = "None",
                                             BsmtCond = "None", BsmtExposure = "None",
                                             BsmtFinType1 = "None", BsmtFinType2 = "None",
@@ -134,8 +184,10 @@ factor_filt <- replace_na(factor_filt, list(Alley = "None", BsmtQual = "None",
 
 summary(factor_filt)
 
+# merge with SalePrice columns
 factor_filt_sale <- cbind(SalePrice = data$SalePrice, factor_filt)
 
+# calculate ANOVA
 av <- aov(SalePrice ~ ., data=factor_filt_sale, projections = TRUE)
 summary(av)
 
@@ -147,9 +199,14 @@ ggplot(data = factor_filt_sale, aes(x = PoolQC, y = SalePrice)) +
 ggplot(data = factor_filt_sale, aes(x = MSZoning, y = SalePrice)) +
   geom_boxplot()
 
+p_n <- ggplot(data = factor_filt_sale, aes(x = Neighborhood, y = SalePrice, fill = Neighborhood)) +
+  geom_boxplot() + labs(title = 'Neighborhood Boxplot (p value < 2e-16)') + theme(axis.text.x = element_text(angle = 45))
+ggsave("Neighborhood_boxplot.png", p_n)
+
 ## EXAMPLES OF INSIGNIFICANT
-ggplot(data = factor_filt_sale, aes(x = BsmtFinType2, y = SalePrice)) +
-  geom_boxplot()
+p_bf <- ggplot(data = factor_filt_sale, aes(x = BsmtFinType2, y = SalePrice, fill = BsmtFinType2)) +
+  geom_boxplot() + labs(title = "BsmtFinType2 Boxplot (p value = 0.740)")
+ggsave("bsmtfintype2_boxplot.png", p_bf)
 
 ggplot(data = factor_filt_sale, aes(x = Fence, y = SalePrice)) +
   geom_boxplot()
@@ -326,6 +383,9 @@ j25 <- left_join(j24, CentralAir_tbl)
 j26 <- left_join(j25, GarageType_tbl)
 j27 <- left_join(j26, SaleType_tbl)
 
+
+
+
 fact_cols <- grep('val', names(j27), value=TRUE)
 
 dummies <- dummyVars(SalePrice ~ ., data = factor_filt2_sale)
@@ -345,8 +405,9 @@ processed2 <- cbind(pp_trans, j27[,fact_cols])
 fitdata_f1 <- cbind(SalePrice = pp_trans_y,processed2)
 fitdata_f2 <- fitdata_f1[c(-1299,-524),]
 
-ggplot(data = fitdata_f2, aes(x = as.factor(Neighborhood_val), y = SalePrice)) +
-  geom_boxplot()
+p_n_v <- ggplot(data = cbind(factor_vars,fitdata_f1), aes(x = as.factor(Neighborhood_val), y = SalePrice, fill = Neighborhood)) +
+  geom_boxplot() + labs(title = 'Neighborhood Boxplot, Target Encoded', x = 'Encoded Value') + theme(axis.text.x = element_text(angle = 45))
+ggsave("Neighborhood_boxplot_encoded.png", p_n_v)
 
 ggplot(data = fitdata_f2, aes(x = as.factor(ExterQual_val), y = SalePrice)) +
   geom_boxplot()
@@ -366,6 +427,20 @@ layout(matrix(1))
 plot(cooksd, pch="*", cex=2, main="Influential Obs by Cooks distance")  # plot cook's distance
 abline(h = 4/sample_size, col="red")  # add cutoff line
 text(x=1:length(cooksd)+1, y=cooksd, labels=ifelse(cooksd>4/sample_size, names(cooksd),""), col="red")  # add labels
+
+df_plot <- data.frame(cbind("Predicted_SalePrice" = predict(lmFit,pp_trans),
+             "Cooks_Distance" = cooksd,
+             "Original_SalePrice" = pp_trans_y[,1]))
+df_plot <- as_tibble(df_plot)
+
+p_cc <- ggplot(data = df_plot, aes(x = Original_SalePrice, y = Predicted_SalePrice, color = Cooks_Distance)) +
+  geom_point(alpha = 0.4) + scale_colour_gradient(low = 'blue', high = 'red') + guides(size = FALSE) +
+  labs(title = "Initial Model with Cook's Distance") +
+  geom_text(aes(label=ifelse(Cooks_Distance>0.2,round(Cooks_Distance,2),'')),hjust=-0.2,vjust=0, fontface = 'bold')
+
+ggsave("cooks_distance.png",p_cc)
+
+plot(df_plot$'Original_SalePrice', df_plot$'Predicted_SalePrice')
 
 fitdata2 <- fitdata1[c(-1299,-524),]
 
@@ -410,7 +485,7 @@ rfe_ctrl <- rfeControl(functions = lmFuncs,
                    method = "repeatedcv",
                    repeats = 1,
                    verbose = TRUE)
-subsets <- seq(from = 5, to = 60, by = 5)
+subsets <- seq(from = 5, to = 60, by = 2)
 lmProfile <- rfe(x = fitdata_f1[which(colnames(fitdata_f1) != 'SalePrice')],
                  y = fitdata_f1$SalePrice,
                  sizes = subsets,
@@ -431,9 +506,21 @@ lmProfile2 <- rfe(x = data.frame(fitdata_f2[,-1]),
                  rfeControl = rfe_ctrl)
 plot(lmProfile2)
 
+minval <- min(lmProfile2$results$RMSE)
+lmProfile2$results$shape <- ifelse(lmProfile2$results$RMSE == minval, 16, 1)
+p_bfs <- ggplot(data = lmProfile2$results, aes(x = Variables, y = RMSE, shape = as.factor(shape))) +
+  geom_point(size = 3, color = 'red', stroke = 1.2) + geom_line(linetype = "dashed") +
+  scale_shape_manual(values=c(1,19),) + labs(title = "Backwards Feature Selection", y = "Cross-Validated RMSE") +
+  theme(legend.position = "none")
+
+ggsave("bfs.png", p_bfs)
+
+
+
+
 SA_fit2 <- safs(x = data.frame(fitdata_f2[,-1]), 
                 y = as_vector(fitdata_f2[,1]),
-                 iters = 200,
+                 iters = 300,
                  safsControl = ctrl,
                  ## Now pass options to `train`
                  method = "lm")
@@ -549,19 +636,20 @@ RMSE(fitdata3$SalePrice, refPred)
 
 
 tunegrid <- expand.grid(
-  mtry = c(2,4,6,8,16,20,30,40),
-  ntree = c(50,100,200,250,300),
-  nPerm = c(1,2,3),
+  mtry = c(10,20,30),
+  ntree = c(50,100,200,400,600,800,1000,1200,1400),
+  nodesize = c(5,10,20),
   sampsize = c(ceiling(nrow(fitdata_f2)*.9),ceiling(nrow(fitdata_f2)*.8),ceiling(nrow(fitdata_f2)*.6)),
   replace = c(TRUE,FALSE)
 )
-tunegrid <- expand.grid(
-  mtry = c(20),
-  ntree = c(300,400,500,600,800,1000,1200,1400),
-  nPerm = c(1),
-  sampsize = c(ceiling(nrow(fitdata_f2)*.8)),
-  replace = c(FALSE)
-)
+# tunegrid <- expand.grid(
+#   mtry = c(20),
+#   ntree = c(300,400,500,600,800,1000,1200,1400),
+#   nodesize = c(2,8,32)
+#   nPerm = c(1),
+#   sampsize = c(ceiling(nrow(fitdata_f2)*.8)),
+#   replace = c(FALSE)
+# )
 
 
 
@@ -601,7 +689,13 @@ rf_gridsearch2 <- train(x = data.frame(fitdata_f2[,-1]),
                        tuneGrid=tunegrid,
                        trControl=control)
 
-rf_gridsearch2
+const_perm <- rf_gridsearch$results[which(rf_gridsearch$results$nPerm == 1),]
+
+p_rf <- ggplot(data = const_perm, aes(x = ntree, y = RMSE, color = as.factor(mtry))) +
+  geom_point() + geom_line() + facet_grid(rows = vars(replace), cols = vars(sampsize), labeller = label_both) +
+  labs(title = "Random Forest Parameter Tuning", color = "mtry")
+
+ggsave("rf_params.png", p_rf)
 
 xgControl <- trainControl(## 10-fold CV
   method = "repeatedcv",
@@ -647,6 +741,25 @@ xgbFit2 <- caret::train(
   y = fitdata_f2[,1],
   trControl = xgControl,
   tuneGrid = grid2,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+grid3 <- expand.grid(
+  nrounds = seq(from = 50, to = 1000, by = 50),
+  eta = c(0.01, 0.015, 0.025, 0.05, 0.1),
+  max_depth = xgbFit1$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = xgbFit2$bestTune$colsample_bytree,
+  min_child_weight = xgbFit2$bestTune$min_child_weight,
+  subsample = xgbFit2$bestTune$subsample
+)
+
+xgbFit3 <- caret::train(
+  x = fitdata_f2[,-1],
+  y = fitdata_f2[,1],
+  trControl = xgControl,
+  tuneGrid = grid3,
   method = "xgbTree",
   verbose = TRUE
 )
@@ -770,8 +883,11 @@ lmFR_facts_Pred_out_inv <- inverse.BoxCoxTrans(pp_params_y$bc$SalePrice, lmFR_fa
 outdata <- cbind(Id = data_test['Id'], SalePrice = lmFR_facts_Pred_out_inv)
 write_csv(data.frame(outdata), 'lmRF_factors_with_caret_v1.csv')
 
-
-
+model_cols <- names(xgbFit3[["trainingData"]])[1:length(names(xgbFit3[["trainingData"]]))-1]
+gbm3_facts_Pred_out <- predict(xgbFit3,data_test_comb[model_cols])
+gbm3_facts_Pred_out_inv <- inverse.BoxCoxTrans(pp_params_y$bc$SalePrice, gbm3_facts_Pred_out)
+outdata <- cbind(Id = data_test['Id'], SalePrice = gbm3_facts_Pred_out_inv)
+write_csv(data.frame(outdata), 'xgbmv3_factors_with_caret_v1.csv')
 
 
 #boxplot(factor_filt$PoolQC, factor_filt$SalePrice)
@@ -800,7 +916,7 @@ na.replace(filt_factors$Electrical, .na="new")
 
 new <- filt_factors %>% replace_na(list(Electrical = 'None'))
 
-replace_na(Electrical = replace_na(Electrical, 0)))
+replace_na(Electrical = replace_na(Electrical, 0))
 
 filt_factors$Electrical <- replace_na(data = filt_factors$Electrical, 'None')
 
