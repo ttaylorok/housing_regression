@@ -518,14 +518,19 @@ ggsave("bfs.png", p_bfs)
 
 
 
-SA_fit2 <- safs(x = data.frame(fitdata_f2[,-1]), 
+SA_fit300 <- safs(x = data.frame(fitdata_f2[,-1]), 
                 y = as_vector(fitdata_f2[,1]),
                  iters = 300,
                  safsControl = ctrl,
                  ## Now pass options to `train`
                  method = "lm")
 
-plot(SA_fit2) + theme_bw()
+plot(SA_fit300) + theme_bw()
+
+p_sa <- ggplot(data = SA_fit300, aes(x = vars(internal$Iter), y = vars(internal$RMSE))) +
+  geom_point() + labs(title = "Simulated Annealing RMSE Error", y = 'Cross Validated RMSE Error')
+
+ggsave("plot_simulated_annealing.png",p_sa)
 
 
 par(mar=c(2,2,2,2))
@@ -635,13 +640,7 @@ RMSE(fitdata3$SalePrice, refPred)
 
 
 
-tunegrid <- expand.grid(
-  mtry = c(10,20,30),
-  ntree = c(50,100,200,400,600,800,1000,1200,1400),
-  nodesize = c(5,10,20),
-  sampsize = c(ceiling(nrow(fitdata_f2)*.9),ceiling(nrow(fitdata_f2)*.8),ceiling(nrow(fitdata_f2)*.6)),
-  replace = c(TRUE,FALSE)
-)
+
 # tunegrid <- expand.grid(
 #   mtry = c(20),
 #   ntree = c(300,400,500,600,800,1000,1200,1400),
@@ -651,16 +650,25 @@ tunegrid <- expand.grid(
 #   replace = c(FALSE)
 # )
 
+# define hyperparameter grid
+tunegrid <- expand.grid(
+  mtry = c(10,20,30),
+  ntree = c(50,100,200,400,600,800,1000,1200,1400),
+  nodesize = c(5,10,20),
+  sampsize = c(ceiling(nrow(fitdata_f2)*.9),ceiling(nrow(fitdata_f2)*.8),
+               ceiling(nrow(fitdata_f2)*.6)),
+  replace = c(TRUE,FALSE)
+)
 
-
+# define custom RF model
 customRF <- list(type = "Regression", library = "randomForest", loop = NULL)
-customRF$parameters <- data.frame(parameter = c("mtry", "ntree","nPerm","sampsize","replace"),
+customRF$parameters <- data.frame(parameter = c("mtry", "ntree","nodesize","sampsize","replace"),
                                   class = c(rep("numeric", 4),"logical"),
-                                  label = c("mtry", "ntree","nPerm","sampsize","replace"))
+                                  label = c("mtry", "ntree","nodesize","sampsize","replace"))
 customRF$grid <- function(x, y, len = NULL, search = "grid") {}
 customRF$fit <- function(x, y, wts, param, lev, last, weights, classProbs, ...) {
   randomForest(x, y, mtry = param$mtry, ntree=param$ntree,
-               nPerm=param$nPerm, sampsize = param$sampsize, replace = param$replace, ...)
+               nPerm=param$nodesize, sampsize = param$sampsize, replace = param$replace, ...)
 }
 customRF$predict <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
   predict(modelFit, newdata)
@@ -669,33 +677,43 @@ customRF$prob <- function(modelFit, newdata, preProc = NULL, submodels = NULL)
 customRF$sort <- function(x) x[order(x[,1]),]
 customRF$levels <- function(x) x$classes
 
-# Create a Random Forest model with default parameters
-# model1 <- randomForest(x = data.frame(fitdata_f2[,-1]),
-#                        y = as_vector(fitdata_f2[,1]),
-#                        importance = TRUE)
-
+# fit control function
 control <- trainControl(method="repeatedcv",
                         number=10,
                         repeats=1,
                         search="grid")
 
-#mtry <- sqrt(ncol(x))
-#tunegrid <- expand.grid(.mtry=mtry)
-
-rf_gridsearch2 <- train(x = data.frame(fitdata_f2[,-1]),
+# apply training
+rf_gridsearch3 <- train(x = data.frame(fitdata_f2[,-1]),
                        y = as_vector(fitdata_f2[,1]),
                        method=customRF,
                        metric="RMSE",
                        tuneGrid=tunegrid,
                        trControl=control)
 
-const_perm <- rf_gridsearch$results[which(rf_gridsearch$results$nPerm == 1),]
+const_nodesize <- rf_gridsearch3$results[which(rf_gridsearch3$results$nodesize == 10),]
 
-p_rf <- ggplot(data = const_perm, aes(x = ntree, y = RMSE, color = as.factor(mtry))) +
+p_rf1 <- ggplot(data = const_nodesize, aes(x = ntree, y = RMSE, color = as.factor(mtry))) +
   geom_point() + geom_line() + facet_grid(rows = vars(replace), cols = vars(sampsize), labeller = label_both) +
-  labs(title = "Random Forest Parameter Tuning", color = "mtry")
+  labs(title = "Random Forest Parameter Tuning, Nodesize = 10", color = "mtry")
 
-ggsave("rf_params.png", p_rf)
+ggsave("rf_params_1.png", p_rf1)
+
+const_nodesize20 <- rf_gridsearch3$results[which(rf_gridsearch3$results$nodesize == 20),]
+
+p_rf2 <- ggplot(data = const_nodesize20, aes(x = ntree, y = RMSE, color = as.factor(mtry))) +
+  geom_point() + geom_line() + facet_grid(rows = vars(replace), cols = vars(sampsize), labeller = label_both) +
+  labs(title = "Random Forest Parameter Tuning, Nodesize = 20", color = "mtry")
+
+ggsave("rf_params_2.png", p_rf2)
+
+const_nodesize5 <- rf_gridsearch3$results[which(rf_gridsearch3$results$nodesize == 5),]
+
+p_rf3 <- ggplot(data = const_nodesize5, aes(x = ntree, y = RMSE, color = as.factor(mtry))) +
+  geom_point() + geom_line() + facet_grid(rows = vars(replace), cols = vars(sampsize), labeller = label_both) +
+  labs(title = "Random Forest Parameter Tuning, Nodesize = 5", color = "mtry")
+
+ggsave("rf_params_3.png", p_rf3)
 
 xgControl <- trainControl(## 10-fold CV
   method = "repeatedcv",
@@ -724,7 +742,12 @@ xgbFit1 <- caret::train(
   verbose = TRUE
 )
 
-xgbFit1
+p_xg1 <- ggplot(data = xgbFit1$results, aes(x = nrounds, y = RMSE, color = as.factor(max_depth))) +
+  geom_point() + geom_line() + facet_wrap(vars(eta), ncol = 2, labeller = label_both) +
+  labs(title = "xgBoost Parameter Tuning (Learning Parameters)", color = "max_depth", y = "Cross-Validated RMSE") +
+  ylim(0.1195,0.135)
+
+ggsave("xg1_params.png", p_xg1)
 
 grid2 <- expand.grid(
   nrounds = seq(from = 50, to = 1000, by = 50),
@@ -745,8 +768,17 @@ xgbFit2 <- caret::train(
   verbose = TRUE
 )
 
+p_xg2 <- ggplot(data = xgbFit2$results, aes(x = nrounds, y = RMSE, color = as.factor(colsample_bytree))) +
+  geom_point() + geom_line() + facet_grid(rows = vars(subsample), cols = vars(min_child_weight), labeller = label_both) +
+  labs(title = "xgBoost Parameter Tuning (Sampling Parameters)", color = "colsample_bytree", y = "Cross-Validated RMSE") +
+  ylim(0.118,0.125)
+
+ggsave("xg2_params.png", p_xg2)
+
+
+
 grid3 <- expand.grid(
-  nrounds = seq(from = 50, to = 1000, by = 50),
+  nrounds = seq(from = 50, to = 4000, by = 50),
   eta = c(0.01, 0.015, 0.025, 0.05, 0.1),
   max_depth = xgbFit1$bestTune$max_depth,
   gamma = 0,
@@ -764,7 +796,55 @@ xgbFit3 <- caret::train(
   verbose = TRUE
 )
 
+p_xg3 <- ggplot(data = xgbFit3$results, aes(x = nrounds, y = RMSE, color = as.factor(eta))) +
+  geom_point() + geom_line()  +
+  labs(title = "xgBoost Parameter Tuning (Final Model Selection)", color = "eta", y = "Cross-Validated RMSE") +
+  ylim(0.115,0.125)
 
+ggsave("xg3_params.png", p_xg3)
+
+grid4 <- expand.grid(
+  nrounds = seq(from = 50, to = 6000, by = 50),
+  eta = c(0.01, 0.015, 0.025, 0.05, 0.1),
+  max_depth = xgbFit1$bestTune$max_depth,
+  gamma = 0,
+  colsample_bytree = xgbFit2$bestTune$colsample_bytree,
+  min_child_weight = xgbFit2$bestTune$min_child_weight,
+  subsample = xgbFit2$bestTune$subsample
+)
+
+xgbFit4 <- caret::train(
+  x = fitdata_f2[,-1],
+  y = fitdata_f2[,1],
+  trControl = xgControl,
+  tuneGrid = grid4,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+grid5 <- expand.grid(
+  nrounds = seq(from = 100, to = 4000, by = 200),
+  eta = c(0.025, 0.05, 0.1, 0.3),
+  max_depth = c(3, 4, 5, 6, 8),
+  gamma = 0,
+  colsample_bytree = 1,
+  min_child_weight = 1,
+  subsample = 1
+)
+
+xgbFit5 <- caret::train(
+  x = fitdata_f2[,-1],
+  y = fitdata_f2[,1],
+  trControl = xgControl,
+  tuneGrid = grid5,
+  method = "xgbTree",
+  verbose = TRUE
+)
+
+ggplot(data = xgbFit5$results, aes(x = nrounds, y = RMSE, color = as.factor(max_depth))) +
+  geom_point() + geom_line() + facet_wrap(vars(eta), ncol = 2, labeller = label_both) +
+  labs(title = "xgBoost Parameter Tuning (Learning Parameters)", color = "max_depth", y = "Cross-Validated RMSE") +
+  ylim(0.1195,0.13)
 
 ########## MAKE PREDICTIONS
 data_test = read_csv("DATA/test.csv")
@@ -887,7 +967,7 @@ model_cols <- names(xgbFit3[["trainingData"]])[1:length(names(xgbFit3[["training
 gbm3_facts_Pred_out <- predict(xgbFit3,data_test_comb[model_cols])
 gbm3_facts_Pred_out_inv <- inverse.BoxCoxTrans(pp_params_y$bc$SalePrice, gbm3_facts_Pred_out)
 outdata <- cbind(Id = data_test['Id'], SalePrice = gbm3_facts_Pred_out_inv)
-write_csv(data.frame(outdata), 'xgbmv3_factors_with_caret_v1.csv')
+write_csv(data.frame(outdata), 'xgbmv3_factors_with_caret_v2.csv')
 
 
 #boxplot(factor_filt$PoolQC, factor_filt$SalePrice)
